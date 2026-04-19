@@ -391,7 +391,44 @@ struct L10n {
 
 // MARK: - Outlook Connection
 
+/// Launch Outlook if not running, unminimize if minimized, bring to front.
+func ensureOutlookReady() {
+    let bundleID = "com.microsoft.Outlook"
+    let isRunning = NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == bundleID })
+
+    if !isRunning {
+        // Launch via NSWorkspace
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            let sema = DispatchSemaphore(value: 0)
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in sema.signal() }
+            _ = sema.wait(timeout: .now() + 10)
+            // Wait for UI to be ready
+            Thread.sleep(forTimeInterval: 3.0)
+        }
+    }
+
+    // Unminimize and bring to front via AppleScript
+    let script = """
+    tell application "Microsoft Outlook"
+        activate
+        set miniaturized of every window to false
+    end tell
+    """
+    if let appleScript = NSAppleScript(source: script) {
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
+    }
+    // Give Outlook time to restore windows
+    if !isRunning { Thread.sleep(forTimeInterval: 2.0) }
+    else { Thread.sleep(forTimeInterval: 0.5) }
+}
+
 func connectOutlook() -> (app: AXUIElement, wins: [AXUIElement])? {
+    // First ensure Outlook is running and visible
+    ensureOutlookReady()
+
     guard let proc = NSWorkspace.shared.runningApplications.first(where: {
         $0.bundleIdentifier == "com.microsoft.Outlook"
     }) else { return nil }

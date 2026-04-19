@@ -1,5 +1,10 @@
 # outlook-ax
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS-blue.svg)](https://developer.apple.com/macos/)
+[![Swift](https://img.shields.io/badge/Swift-5.9+-orange.svg)](https://swift.org)
+[![GitHub release](https://img.shields.io/github/v/release/trsdn/outlook-ax)](https://github.com/trsdn/outlook-ax/releases)
+
 Lightweight CLI to read and control Microsoft Outlook (new/Electron) via the macOS Accessibility API. No dependencies, no AppleScript — pure AXUIElement access.
 
 ## Build
@@ -191,7 +196,7 @@ outlook-ax calendar calendars --json | jq '.[] | select(.visible)'
 
 ## Limitations
 
-- Outlook must be running and visible (not minimized)
+- Outlook is auto-launched and unminimized when needed (via AppleScript)
 - Calendar event parsing depends on the current calendar view layout
 - Date format for `--date` must match Outlook's locale (DD.MM.YYYY for German)
 - Inbox parsing heuristic — field order may vary across Outlook versions
