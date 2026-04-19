@@ -1,0 +1,7 @@
+# Compiled binary
+outlook-ax
+*.o
+*.dSYM/
+
+# macOS
+.DS_Store
