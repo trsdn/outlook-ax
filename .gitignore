@@ -5,3 +5,6 @@ outlook-ax
 
 # macOS
 .DS_Store
+
+# Local skill mirror (synced from .agents/skills/ at session start)
+.claude/skills/

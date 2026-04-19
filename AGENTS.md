@@ -80,6 +80,12 @@ docs/ax-paths.md          # Verified AX element paths by view
 - Mail compose opens draft but does NOT send (unless explicit `--send` on calendar create)
 - Date/time fields require keyboard simulation (CGEvent), not AXValue writes
 
+## Skills Path
+
+Canonical skills live in `.agents/skills/`. Before using or listing skills,
+run `bash scripts/sync-agent-skills.sh` to mirror them to `.claude/skills/`.
+`.claude/skills/` is gitignored and only a local mirror.
+
 ## Do NOT
 
 - Add dependencies or Package.swift — this must stay a single `swiftc` compilation
