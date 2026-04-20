@@ -55,12 +55,42 @@ public enum OutlookAX {
         }
     }
 
+    public struct Attendee: Codable, Sendable, Equatable {
+        public var name: String
+        /// "organizer" | "required" | "optional"
+        public var type: String
+        /// "accepted" | "declined" | "tentative" | "none"
+        public var response: String
+
+        public init(name: String, type: String, response: String) {
+            self.name = name; self.type = type; self.response = response
+        }
+    }
+
+    public struct EventDetails: Codable, Sendable, Equatable {
+        public var attendees: [Attendee]
+        public var location: String
+        public var body: String
+        public var calendar: String
+        public var organizer: String
+
+        public init(
+            attendees: [Attendee], location: String, body: String,
+            calendar: String, organizer: String
+        ) {
+            self.attendees = attendees; self.location = location
+            self.body = body; self.calendar = calendar; self.organizer = organizer
+        }
+    }
+
     public enum OutlookAXError: LocalizedError {
         case outlookNotRunning
         case notInCalendarView
         case viewSwitchFailed(target: CalendarViewMode)
         case eventsTableNotFound
         case navigationFailed(String)
+        case eventRowNotFound(title: String)
+        case detailWindowNotOpened
 
         public var errorDescription: String? {
             switch self {
@@ -74,6 +104,10 @@ public enum OutlookAX {
                 return "Calendar events table not found (Outlook probably not in list view)."
             case .navigationFailed(let msg):
                 return "Could not navigate Outlook: \(msg)"
+            case .eventRowNotFound(let title):
+                return "Could not find '\(title)' in Outlook's list view."
+            case .detailWindowNotOpened:
+                return "Outlook did not open the event detail window."
             }
         }
     }
@@ -151,6 +185,76 @@ public enum OutlookAX {
             return true
         }
         throw OutlookAXError.viewSwitchFailed(target: mode)
+    }
+
+    /// Open the detail window for the event whose title+date matches the
+    /// given `event`, read attendees/location/body/calendar, then close the
+    /// detail window.
+    ///
+    /// Double-click-based: Outlook comes to front briefly (~1 s). Use for
+    /// explicit user actions (e.g. "Load details" / meeting confirmation),
+    /// not on every selection.
+    public static func readEventDetails(for event: CalendarEvent) throws -> EventDetails {
+        guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
+        let calWin = conn.wins.first(where: {
+            equalsAny(titleOf($0), L10n.calendarWindow)
+        }) ?? conn.wins.first!
+
+        guard let table = findAll(calWin, matching: {
+            roleOf($0) == "AXTable" && matchesAny(descOf($0), L10n.calendarEventsTable)
+        }, maxDepth: 12).first else {
+            throw OutlookAXError.eventsTableNotFound
+        }
+
+        let targetKey = normaliseTitle(event.title)
+        // Walk the rows, track current date header, match by title+date.
+        var currentDate = ""
+        var matchedCell: AXUIElement?
+        var matchedRow: AXUIElement?
+        for row in childrenOf(table) where roleOf(row) == "AXRow" {
+            guard let cell = childrenOf(row).first(where: { roleOf($0) == "AXCell" }) else { continue }
+            let texts = childrenOf(cell)
+                .filter { roleOf($0) == "AXStaticText" }
+                .compactMap { v -> String? in let s = valueOf(v); return s.isEmpty ? nil : s }
+            let cellDesc = descOf(cell)
+            if cellDesc.isEmpty && texts.count == 1 {
+                currentDate = texts[0]
+                continue
+            }
+            guard let raw = texts.first else { continue }
+            if currentDate == event.date && normaliseTitle(stripResponsePrefix(raw)) == targetKey {
+                matchedCell = cell; matchedRow = row; break
+            }
+        }
+        guard let cell = matchedCell else {
+            throw OutlookAXError.eventRowNotFound(title: event.title)
+        }
+
+        // Close any stale detail windows first so we can reliably find the
+        // newly-opened one below by "non-calendar window" heuristic.
+        closeAuxiliaryWindows(in: conn.app)
+
+        // Select the row (best-effort) and double-click its centre to open.
+        if let row = matchedRow {
+            AXUIElementSetAttributeValue(table, "AXSelectedRows" as CFString, [row] as CFArray)
+            Thread.sleep(forTimeInterval: 0.15)
+        }
+        guard let pos = posOf(cell), let size = sizeOf(cell) else {
+            throw OutlookAXError.detailWindowNotOpened
+        }
+        doubleClick(at: CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2))
+        Thread.sleep(forTimeInterval: 1.5)
+
+        let allWins = refreshWindows(conn.app)
+        guard let detailWin = allWins.first(where: {
+            let t = titleOf($0)
+            return !t.isEmpty && !equalsAny(t, L10n.calendarWindow)
+        }) else {
+            throw OutlookAXError.detailWindowNotOpened
+        }
+        defer { closeWindow(detailWin) }
+
+        return parseDetailWindow(detailWin, fallbackOrganizer: event.organizer, fallbackCalendar: event.calendar)
     }
 
     /// Read Outlook's calendar list view into structured events.
@@ -273,6 +377,108 @@ public enum OutlookAX {
         }
         trace("triggerMenu: no match for \(path[1])")
         return false
+    }
+
+    // MARK: - Private: detail-window parser
+
+    private static func parseDetailWindow(
+        _ win: AXUIElement,
+        fallbackOrganizer: String,
+        fallbackCalendar: String
+    ) -> EventDetails {
+        let winTitle = titleOf(win)
+        // "Subject • Calendar • account"
+        var calendar = fallbackCalendar
+        let parts = winTitle.components(separatedBy: " • ")
+        if parts.count >= 2 {
+            calendar = parts.dropFirst().joined(separator: " • ")
+        }
+
+        // Location: first non-empty AXTextField.
+        var location = ""
+        for field in findAll(win, matching: {
+            roleOf($0) == "AXTextField" && !valueOf($0).isEmpty
+        }, maxDepth: 10) {
+            let v = valueOf(field)
+            if location.isEmpty { location = v }
+        }
+
+        // Attendees: walk AXStaticText, track section + response prefix.
+        var attendees: [Attendee] = []
+        var organizer = fallbackOrganizer
+        var section = ""
+        var response = ""
+        let texts = findAll(win, matching: {
+            roleOf($0) == "AXStaticText" && !valueOf($0).isEmpty
+        }, maxDepth: 10)
+        for t in texts {
+            let v = valueOf(t)
+            if equalsAny(v, L10n.sectionOrganizer) { section = "organizer"; response = ""; continue }
+            if equalsAny(v, L10n.sectionRequired) { section = "required"; response = ""; continue }
+            if equalsAny(v, L10n.sectionOptional) { section = "optional"; response = ""; continue }
+            if endsWithAny(v, L10n.respAccepted) { response = "accepted"; continue }
+            if endsWithAny(v, L10n.respDeclined) { response = "declined"; continue }
+            if endsWithAny(v, L10n.respNotResponded) { response = "none"; continue }
+            if endsWithAny(v, L10n.respTentative) { response = "tentative"; continue }
+            if v == winTitle { continue }
+            let isNoise = matchesAny(v, L10n.detailNoise) || v.contains("•") || v.count > 80 || v.count < 2
+            if section == "organizer" && !isNoise && organizer.isEmpty {
+                organizer = v
+                continue
+            }
+            if (section == "required" || section == "optional") && !isNoise {
+                attendees.append(Attendee(name: v, type: section, response: response))
+            }
+        }
+
+        // Body: AXWebArea whose description is "Reading Pane".
+        var body = ""
+        if let web = findElement(win, matching: {
+            descOf($0) == "Reading Pane" && roleOf($0) == "AXWebArea"
+        }) {
+            var parts: [String] = []
+            collectText(web, into: &parts)
+            body = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return EventDetails(
+            attendees: attendees, location: location, body: body,
+            calendar: calendar, organizer: organizer
+        )
+    }
+
+    private static func closeAuxiliaryWindows(in app: AXUIElement) {
+        for w in refreshWindows(app) {
+            let t = titleOf(w)
+            if t.isEmpty || equalsAny(t, L10n.calendarWindow) { continue }
+            closeWindow(w)
+        }
+    }
+
+    private static func closeWindow(_ win: AXUIElement) {
+        for child in childrenOf(win) where roleOf(child) == "AXButton" {
+            var sr: CFTypeRef?
+            AXUIElementCopyAttributeValue(child, kAXSubroleAttribute as CFString, &sr)
+            if (sr as? String) == "AXCloseButton" {
+                AXUIElementPerformAction(child, kAXPressAction as CFString)
+                Thread.sleep(forTimeInterval: 0.25)
+                return
+            }
+        }
+    }
+
+    private static func stripResponsePrefix(_ raw: String) -> String {
+        var s = raw
+        if startsWithAny(s, L10n.declinedPrefix) {
+            s = String(s.drop(while: { $0 != ":" }).dropFirst(2))
+        } else if startsWithAny(s, L10n.followingPrefix) {
+            s = String(s.drop(while: { $0 != ":" }).dropFirst(2))
+        }
+        return s.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func normaliseTitle(_ s: String) -> String {
+        s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Private: list-view parser
@@ -448,6 +654,57 @@ private func startsWithAny(_ text: String, _ variants: [String]) -> Bool {
 private func equalsAny(_ text: String, _ variants: [String]) -> Bool {
     variants.contains(text)
 }
+private func endsWithAny(_ text: String, _ variants: [String]) -> Bool {
+    variants.contains(where: { text.hasSuffix($0) })
+}
+
+private func posOf(_ e: AXUIElement) -> CGPoint? {
+    var r: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, "AXPosition" as CFString, &r) == .success else { return nil }
+    var p = CGPoint.zero
+    AXValueGetValue(r as! AXValue, .cgPoint, &p)
+    return p
+}
+private func sizeOf(_ e: AXUIElement) -> CGSize? {
+    var r: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, "AXSize" as CFString, &r) == .success else { return nil }
+    var s = CGSize.zero
+    AXValueGetValue(r as! AXValue, .cgSize, &s)
+    return s
+}
+private func doubleClick(at point: CGPoint) {
+    let src = CGEventSource(stateID: .hidSystemState)
+    for clickState: Int64 in [1, 2] {
+        if let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown,
+                              mouseCursorPosition: point, mouseButton: .left) {
+            down.setIntegerValueField(.mouseEventClickState, value: clickState)
+            down.post(tap: .cghidEventTap)
+        }
+        if let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp,
+                            mouseCursorPosition: point, mouseButton: .left) {
+            up.setIntegerValueField(.mouseEventClickState, value: clickState)
+            up.post(tap: .cghidEventTap)
+        }
+        if clickState == 1 { Thread.sleep(forTimeInterval: 0.05) }
+    }
+}
+
+/// Recursively collect AXStaticText values + http AXLink label+URL tuples
+/// into `parts`, used to flatten a Reading Pane body into plain text.
+private func collectText(_ e: AXUIElement, into parts: inout [String], depth: Int = 0, maxDepth: Int = 8) {
+    if depth > maxDepth { return }
+    let role = roleOf(e)
+    if role == "AXStaticText" {
+        let v = valueOf(e); if !v.isEmpty { parts.append(v) }
+    }
+    if role == "AXLink" {
+        let t = titleOf(e); let d = descOf(e)
+        if d.hasPrefix("http") && !t.isEmpty {
+            parts.append("[\(t)](\(d))"); return
+        }
+    }
+    for c in childrenOf(e) { collectText(c, into: &parts, depth: depth + 1, maxDepth: maxDepth) }
+}
 
 private func pressButtonAny(_ win: AXUIElement, descPrefixes: [String]) -> Bool {
     if let btn = findElement(win, matching: { el in
@@ -488,6 +745,16 @@ private enum L10n {
     static let menuView             = ["Anzeigen", "View", "Affichage"]
     static let menuSwitchTo         = ["Wechseln zu", "Switch to", "Basculer vers"]
     static let navCalendar          = ["Kalender", "Calendar", "Calendrier"]
+
+    // Detail-window parsing
+    static let sectionOrganizer     = ["Organisator", "Organizer", "Organisateur", "Organizador"]
+    static let sectionRequired      = ["Erforderlich", "Required", "Obligatoire", "Obligatorio"]
+    static let sectionOptional      = ["Optional", "Facultatif", "Opcional"]
+    static let respAccepted         = ["angenommen.", "accepted."]
+    static let respDeclined         = ["abgesagt.", "declined."]
+    static let respNotResponded     = ["nicht geantwortet.", "not responded.", "haven't responded."]
+    static let respTentative        = ["mit Vorbehalt.", "tentative.", "tentatively."]
+    static let detailNoise          = ["statt.", "Findet am", "Takes place", "instead.", "Tiene lugar"]
 
     static let today                = ["Heute", "Today", "Aujourd'hui", "Hoy"]
     static let nextDay              = ["Nächster Tag", "Next day", "Next Day", "Jour suivant", "Día siguiente"]
