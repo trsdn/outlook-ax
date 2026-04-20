@@ -90,6 +90,54 @@ public enum OutlookAX {
         connect() != nil
     }
 
+    /// Switch Outlook to the Calendar view (from Mail, People, etc.).
+    /// Uses sidebar/menu-bar AXPress — Outlook does not need to come to
+    /// the foreground.
+    @discardableResult
+    public static func switchToCalendar() throws -> Bool {
+        guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
+        // Already on calendar? Nothing to do.
+        if currentView(conn.wins) == "calendar" { return true }
+        let win = conn.wins[0]
+
+        // Sidebar button — try the common roles in order. Outlook may expose
+        // the Calendar nav entry as any of AXRadioButton/AXButton/AXTab.
+        for role in ["AXRadioButton", "AXButton", "AXTab", "AXMenuItem"] {
+            if let btn = findElement(win, matching: {
+                let d = descOf($0); let t = titleOf($0)
+                return (equalsAny(d, L10n.navCalendar) ||
+                        equalsAny(t, L10n.navCalendar) ||
+                        startsWithAny(d, L10n.navCalendar)) &&
+                    roleOf($0) == role
+            }) {
+                AXUIElementPerformAction(btn, kAXPressAction as CFString)
+                Thread.sleep(forTimeInterval: 0.8)
+                if currentView(refreshWindows(conn.app)) == "calendar" { return true }
+            }
+        }
+
+        // Menu bar fallback: View > Switch to > Calendar.
+        var mbRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(conn.app, kAXMenuBarAttribute as CFString, &mbRef) == .success,
+           let menuBar = mbRef as! AXUIElement? {
+            for menu in childrenOf(menuBar) where equalsAny(titleOf(menu), L10n.menuView) {
+                for child in childrenOf(menu) {
+                    for item in childrenOf(child) where equalsAny(titleOf(item), L10n.menuSwitchTo) {
+                        for sub in childrenOf(item) {
+                            for subItem in childrenOf(sub) where equalsAny(titleOf(subItem), L10n.navCalendar) {
+                                AXUIElementPerformAction(subItem, kAXPressAction as CFString)
+                                Thread.sleep(forTimeInterval: 0.8)
+                                if currentView(refreshWindows(conn.app)) == "calendar" { return true }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        throw OutlookAXError.navigationFailed("Could not switch Outlook to calendar view.")
+    }
+
     /// Switch Outlook's calendar to the given view via the menu bar
     /// (Anzeigen/View > <mode>). Uses AXPressAction — no keyboard focus
     /// needed, Outlook stays in the background.
@@ -168,6 +216,12 @@ public enum OutlookAX {
             if equalsAny(t, L10n.inboxWindow) || t.contains("Outlook") { return "mail" }
         }
         return "unknown"
+    }
+
+    private static func refreshWindows(_ app: AXUIElement) -> [AXUIElement] {
+        var ref: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &ref)
+        return ref as? [AXUIElement] ?? []
     }
 
     // MARK: - Private: menu bar
@@ -392,6 +446,8 @@ private enum L10n {
     static let followingPrefix      = ["Following: "]
 
     static let menuView             = ["Anzeigen", "View", "Affichage"]
+    static let menuSwitchTo         = ["Wechseln zu", "Switch to", "Basculer vers"]
+    static let navCalendar          = ["Kalender", "Calendar", "Calendrier"]
 
     static let viewDay              = ["Tag", "Day", "Jour"]
     static let viewWorkWeek         = ["Arbeitswoche", "Work Week", "Semaine de travail"]
