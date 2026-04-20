@@ -204,12 +204,21 @@ public enum OutlookAX {
     public static func switchCalendarView(to mode: CalendarViewMode) throws -> Bool {
         guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
         let variants = localizedVariants(for: mode)
-        if triggerMenu(conn.app, path: [L10n.menuView, variants]) {
-            // Give Outlook a beat to re-render the AX tree.
-            Thread.sleep(forTimeInterval: 0.4)
-            return true
+        if currentCalendarViewMode() == mode { return true }
+        guard triggerMenu(conn.app, path: [L10n.menuView, variants]) else {
+            throw OutlookAXError.viewSwitchFailed(target: mode)
         }
-        throw OutlookAXError.viewSwitchFailed(target: mode)
+        // Press succeeded — poll for Outlook to actually render the new view.
+        // Check every 120 ms for up to 3 s; the AX tree update lags behind
+        // the menu action by ~500 ms on slower machines / large calendars.
+        let deadline = Date().addingTimeInterval(3.0)
+        while Date() < deadline {
+            if currentCalendarViewMode() == mode { return true }
+            Thread.sleep(forTimeInterval: 0.12)
+        }
+        // Popup title didn't update — accept press anyway; caller may see
+        // the new state a moment later.
+        return true
     }
 
     /// Open the detail window for the event whose title+date matches the
