@@ -124,13 +124,38 @@ public enum OutlookAX {
         connect() != nil
     }
 
+    /// Read the currently-selected calendar view mode, or nil if we can't
+    /// determine it (e.g. Outlook is not on the Calendar tab). Uses the
+    /// "Kalenderansicht" popup button's title, which reflects live UI state.
+    public static func currentCalendarViewMode() -> CalendarViewMode? {
+        guard let conn = connect() else { return nil }
+        for win in conn.wins {
+            guard let picker = findElement(win, matching: { el in
+                guard roleOf(el) == "AXPopUpButton" else { return false }
+                let d = descOf(el)
+                return L10n.calendarViewPicker.contains(where: { d.hasPrefix($0) })
+            }) else { continue }
+            let label = titleOf(picker)
+            if L10n.viewDay.contains(label) { return .day }
+            if L10n.viewWorkWeek.contains(label) { return .workWeek }
+            if L10n.viewWeek.contains(label) { return .week }
+            if L10n.viewMonth.contains(label) { return .month }
+            if L10n.viewThreeDay.contains(label) { return .threeDay }
+            if L10n.viewList.contains(label) { return .list }
+        }
+        return nil
+    }
+
     /// Switch Outlook to the Calendar view (from Mail, People, etc.).
     /// Uses sidebar/menu-bar AXPress — Outlook does not need to come to
     /// the foreground.
     @discardableResult
     public static func switchToCalendar() throws -> Bool {
         guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
-        // Already on calendar? Nothing to do.
+        // Already on calendar? Verify by checking the calendar view popup is
+        // present (window title alone can false-positive for Mail builds that
+        // show "Kalender" somewhere in the tree).
+        if currentCalendarViewMode() != nil { return true }
         if currentView(conn.wins) == "calendar" { return true }
         let win = conn.wins[0]
 
@@ -745,6 +770,8 @@ private enum L10n {
     static let menuView             = ["Anzeigen", "View", "Affichage"]
     static let menuSwitchTo         = ["Wechseln zu", "Switch to", "Basculer vers"]
     static let navCalendar          = ["Kalender", "Calendar", "Calendrier"]
+
+    static let calendarViewPicker   = ["Kalenderansicht", "Calendar view", "Vue du calendrier"]
 
     // Detail-window parsing
     static let sectionOrganizer     = ["Organisator", "Organizer", "Organisateur", "Organizador"]
