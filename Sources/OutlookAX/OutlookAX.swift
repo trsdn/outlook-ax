@@ -175,24 +175,36 @@ public enum OutlookAX {
         return parseEventsTable(table)
     }
 
-    /// Navigate Outlook's calendar to the given date via the mini calendar.
-    /// Accepts Outlook's localised date format; callers must pass the label
-    /// that Outlook uses (e.g. `"20. April"` in German).
-    @discardableResult
-    public static func navigate(toDateLabel label: String) throws -> Bool {
+    /// Step the calendar N days relative to today. Negative offsets go back,
+    /// positive offsets go forward. `0` clicks the Today button.
+    ///
+    /// Works reliably across any range because it uses Outlook's Previous
+    /// day / Next day arrow buttons (always visible), unlike date-picker
+    /// clicks which require the day to be inside the current mini-calendar
+    /// month.
+    public static func navigateCalendar(byDays offset: Int) throws {
         guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
-        // The mini calendar renders dates as AXButtons with their day label
-        // as the title. Find one whose title contains the requested label.
-        for win in conn.wins {
-            if let btn = findElement(win, matching: {
-                roleOf($0) == "AXButton" && titleOf($0).contains(label)
-            }) {
-                AXUIElementPerformAction(btn, kAXPressAction as CFString)
-                Thread.sleep(forTimeInterval: 0.3)
-                return true
+        let win = conn.wins[0]
+
+        if offset == 0 {
+            guard pressButtonAny(win, descPrefixes: L10n.today) else {
+                throw OutlookAXError.navigationFailed("Today button not found.")
             }
+            Thread.sleep(forTimeInterval: 0.3)
+            return
         }
-        throw OutlookAXError.navigationFailed("Date label '\(label)' not found in mini calendar.")
+
+        let (variants, label) = offset < 0
+            ? (L10n.prevDay, "Previous day")
+            : (L10n.nextDay, "Next day")
+        for _ in 0..<abs(offset) {
+            guard pressButtonAny(win, descPrefixes: variants) else {
+                throw OutlookAXError.navigationFailed("\(label) button not found.")
+            }
+            // Small sleep so successive presses register; Outlook's nav is
+            // synchronous enough that 120 ms is fine.
+            Thread.sleep(forTimeInterval: 0.12)
+        }
     }
 
     // MARK: - Private: connection
@@ -437,6 +449,18 @@ private func equalsAny(_ text: String, _ variants: [String]) -> Bool {
     variants.contains(text)
 }
 
+private func pressButtonAny(_ win: AXUIElement, descPrefixes: [String]) -> Bool {
+    if let btn = findElement(win, matching: { el in
+        guard roleOf(el) == "AXButton" else { return false }
+        let d = descOf(el)
+        return descPrefixes.contains(where: { d.hasPrefix($0) })
+    }) {
+        AXUIElementPerformAction(btn, kAXPressAction as CFString)
+        return true
+    }
+    return false
+}
+
 // MARK: - L10n (file-private, subset used by the library)
 
 private enum L10n {
@@ -464,6 +488,10 @@ private enum L10n {
     static let menuView             = ["Anzeigen", "View", "Affichage"]
     static let menuSwitchTo         = ["Wechseln zu", "Switch to", "Basculer vers"]
     static let navCalendar          = ["Kalender", "Calendar", "Calendrier"]
+
+    static let today                = ["Heute", "Today", "Aujourd'hui", "Hoy"]
+    static let nextDay              = ["Nächster Tag", "Next day", "Next Day", "Jour suivant", "Día siguiente"]
+    static let prevDay              = ["Vorheriger Tag", "Previous day", "Previous Day", "Jour précédent", "Día anterior"]
 
     static let viewDay              = ["Tag", "Day", "Jour"]
     static let viewWorkWeek         = ["Arbeitswoche", "Work Week", "Semaine de travail"]
