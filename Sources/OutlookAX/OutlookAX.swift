@@ -226,24 +226,40 @@ public enum OutlookAX {
 
     // MARK: - Private: menu bar
 
+    /// Set by clients that want internal diagnostics piped into their own log.
+    public nonisolated(unsafe) static var logger: (@Sendable (String) -> Void)? = nil
+
+    private static func trace(_ msg: String) { logger?(msg) }
+
     private static func triggerMenu(_ app: AXUIElement, path: [[String]]) -> Bool {
         var mbRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &mbRef) == .success,
               let menuBar = mbRef as! AXUIElement?
-        else { return false }
+        else {
+            trace("triggerMenu: kAXMenuBarAttribute failed")
+            return false
+        }
         guard path.count >= 2 else { return false }
+        let topCount = childrenOf(menuBar).count
+        trace("triggerMenu: menu bar children=\(topCount) looking for top=\(path[0]) item=\(path[1])")
         for topItem in childrenOf(menuBar) {
-            if equalsAny(titleOf(topItem), path[0]) {
-                for submenu in childrenOf(topItem) {
-                    for item in childrenOf(submenu) {
-                        if equalsAny(titleOf(item), path[1]) {
-                            AXUIElementPerformAction(item, kAXPressAction as CFString)
-                            return true
-                        }
+            let title = titleOf(topItem)
+            guard equalsAny(title, path[0]) else { continue }
+            let submenus = childrenOf(topItem)
+            trace("triggerMenu: matched top='\(title)', submenus=\(submenus.count)")
+            for submenu in submenus {
+                let items = childrenOf(submenu)
+                trace("triggerMenu: submenu children=\(items.count)")
+                for item in items {
+                    if equalsAny(titleOf(item), path[1]) {
+                        AXUIElementPerformAction(item, kAXPressAction as CFString)
+                        trace("triggerMenu: pressed '\(titleOf(item))'")
+                        return true
                     }
                 }
             }
         }
+        trace("triggerMenu: no match for \(path[1])")
         return false
     }
 
