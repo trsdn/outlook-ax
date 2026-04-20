@@ -204,21 +204,44 @@ public enum OutlookAX {
     public static func switchCalendarView(to mode: CalendarViewMode) throws -> Bool {
         guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
         let variants = localizedVariants(for: mode)
+        // Fast path: already there according to the popup OR (for .list) the
+        // events table is visible — whichever is true. Popup title lags the
+        // actual view state, so the table check is the more reliable signal.
+        if mode == .list, findEventsTable(in: conn) != nil { return true }
         if currentCalendarViewMode() == mode { return true }
+
         guard triggerMenu(conn.app, path: [L10n.menuView, variants]) else {
             throw OutlookAXError.viewSwitchFailed(target: mode)
         }
-        // Press succeeded — poll for Outlook to actually render the new view.
-        // Check every 120 ms for up to 3 s; the AX tree update lags behind
-        // the menu action by ~500 ms on slower machines / large calendars.
+
+        // Poll for Outlook to actually render the target view. For .list
+        // we watch the events AXTable (definitive indicator). For other
+        // modes we fall back to the popup title.
         let deadline = Date().addingTimeInterval(3.0)
         while Date() < deadline {
-            if currentCalendarViewMode() == mode { return true }
-            Thread.sleep(forTimeInterval: 0.12)
+            if mode == .list {
+                if findEventsTable(in: conn) != nil { return true }
+            } else if currentCalendarViewMode() == mode {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.15)
         }
-        // Popup title didn't update — accept press anyway; caller may see
-        // the new state a moment later.
+        // Press was accepted — return true; caller should verify by attempting
+        // the read. Throwing here would mask the common case where Outlook
+        // simply rendered late.
         return true
+    }
+
+    /// Find the list-view events AXTable, if one is currently rendered.
+    /// Used as a render-state oracle for .list because the popup title is
+    /// stale after AX press.
+    private static func findEventsTable(in conn: (app: AXUIElement, wins: [AXUIElement])) -> AXUIElement? {
+        let calWin = conn.wins.first(where: {
+            equalsAny(titleOf($0), L10n.calendarWindow)
+        }) ?? conn.wins.first!
+        return findAll(calWin, matching: {
+            roleOf($0) == "AXTable" && matchesAny(descOf($0), L10n.calendarEventsTable)
+        }, maxDepth: 12).first
     }
 
     /// Open the detail window for the event whose title+date matches the
