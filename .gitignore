@@ -6,5 +6,9 @@ outlook-ax
 # macOS
 .DS_Store
 
+# SwiftPM
+.build/
+Package.resolved
+
 # Local skill mirror (synced from .agents/skills/ at session start)
 .claude/skills/
