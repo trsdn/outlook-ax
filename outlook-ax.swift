@@ -1390,45 +1390,39 @@ func cmdCalendarCreate(subject: String, attendee: String?, date: String?, time: 
 
 func cmdCalendarView(mode: String) {
     guard let conn = connectOutlook() else { fail("Outlook not running") }
-    let win = conn.wins[0]
 
-    // The view picker is a popup button with desc starting with "Kalenderansicht" / "Calendar view" etc.
+    // Map mode to localized label variants
+    let variants: [String]
+    switch mode.lowercased() {
+    case "day", "tag", "jour": variants = L10n.viewDay
+    case "workweek", "arbeitswoche": variants = L10n.viewWorkWeek
+    case "week", "woche", "semaine": variants = L10n.viewWeek
+    case "month", "monat", "mois": variants = L10n.viewMonth
+    case "threeday", "3day", "drei": variants = L10n.viewThreeDay
+    case "list", "liste": variants = L10n.viewList
+    default: variants = [mode]
+    }
+
+    // Prefer menu bar (View > <mode>): AXPress works without keyboard focus,
+    // so the switch is reliable even when Outlook is in the background.
+    if triggerMenuL10n(conn.app, path: [L10n.menuView, variants]) {
+        Thread.sleep(forTimeInterval: 0.4)
+        ok("Calendar view changed", extra: ["mode": mode])
+        return
+    }
+
+    // Fallback: the calendar view popup + typed text (needs Outlook focused).
+    let win = conn.wins[0]
     if let viewPopup = findElement(win, matching: {
         startsWithAny(descOf($0), L10n.calendarViewPicker) && roleOf($0) == "AXPopUpButton"
     }) {
-        // First show the menu
-        AXUIElementPerformAction(viewPopup, kAXShowMenuAction as CFString)
-        Thread.sleep(forTimeInterval: 0.5)
-
-        // Map mode to localized label — try all variants until one matches a menu item
-        let variants: [String]
-        switch mode.lowercased() {
-        case "day", "tag", "jour": variants = L10n.viewDay
-        case "workweek", "arbeitswoche": variants = L10n.viewWorkWeek
-        case "week", "woche", "semaine": variants = L10n.viewWeek
-        case "month", "monat", "mois": variants = L10n.viewMonth
-        case "threeday", "3day", "drei": variants = L10n.viewThreeDay
-        case "list", "liste": variants = L10n.viewList
-        default: variants = [mode]
-        }
-        let label = variants[0]
-
-        // Find and click the menu item
-        Thread.sleep(forTimeInterval: 0.3)
-        // Type the first letter to select, or press escape and try menu approach
-        pressEscape()
-        Thread.sleep(forTimeInterval: 0.2)
-
         AXUIElementPerformAction(viewPopup, kAXPressAction as CFString)
         Thread.sleep(forTimeInterval: 0.5)
-
-        // The popup opened — type text to filter
-        typeText(label)
+        typeText(variants[0])
         Thread.sleep(forTimeInterval: 0.3)
         pressReturn()
         Thread.sleep(forTimeInterval: 0.5)
-
-        ok("Calendar view changed", extra: ["mode": mode])
+        ok("Calendar view changed", extra: ["mode": mode, "via": "popup"])
     } else {
         fail("Calendar view picker not found — are you in calendar view?")
     }
