@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `--json` produces JSON v2 by default (v1 via `--json-version 1`)
 
-## [1.1.0] — Unreleased
+## [1.1.0] — 2026-07-29
 
 ### Added
 
@@ -69,5 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - AX discovery skill — .agents/skills/ax-discovery/SKILL.md
 - Skills sync pattern — .agents/skills/ → .claude/skills/ via SessionStart hook
 
-[Unreleased]: https://github.com/trsdn/outlook-ax/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/trsdn/outlook-ax/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/trsdn/outlook-ax/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/trsdn/outlook-ax/releases/tag/v1.0.0
