@@ -157,7 +157,10 @@ public enum OutlookAX {
         // show "Kalender" somewhere in the tree).
         if currentCalendarViewMode() != nil { return true }
         if currentView(conn.wins) == "calendar" { return true }
-        let win = conn.wins[0]
+        // Select the main Outlook window (first non-auxiliary window).
+        guard let win = conn.wins.first else {
+            throw OutlookAXError.navigationFailed("No Outlook windows available.")
+        }
 
         // Sidebar button — try the common roles in order. Outlook may expose
         // the Calendar nav entry as any of AXRadioButton/AXButton/AXTab.
@@ -345,7 +348,11 @@ public enum OutlookAX {
     /// month.
     public static func navigateCalendar(byDays offset: Int) throws {
         guard let conn = connect() else { throw OutlookAXError.outlookNotRunning }
-        let win = conn.wins[0]
+        // Use the calendar window for navigation, falling back to the first window.
+        guard let win = conn.wins.first(where: { equalsAny(titleOf($0), L10n.calendarWindow) })
+                ?? conn.wins.first else {
+            throw OutlookAXError.navigationFailed("No accessible windows for navigation.")
+        }
 
         if offset == 0 {
             guard pressButtonAny(win, descPrefixes: L10n.today) else {
@@ -774,55 +781,4 @@ private func pressButtonAny(_ win: AXUIElement, descPrefixes: [String]) -> Bool 
     }
     return false
 }
-
-// MARK: - L10n (file-private, subset used by the library)
-
-private enum L10n {
-    static let calendarWindow       = ["Kalender", "Calendar", "Calendrier", "Calendario"]
-    static let inboxWindow          = ["Posteingang", "Inbox", "Boîte de réception", "Bandeja de entrada"]
-
-    static let calendarEventsTable  = ["Kalenderereignisse", "Calendar events", "Événements du calendrier", "Eventos del calendario"]
-    static let allDay               = ["ganztägig", "all day", "all-day", "toute la journée", "todo el día", "tutto il giorno"]
-
-    static let showAsPrefix         = ["anzeigen als", "show as", "afficher comme", "mostrar como"]
-    static let statusBusy           = ["Gebucht", "Busy", "Occupé", "Ocupado"]
-    static let statusFree           = ["Frei", "Free", "Disponible", "Libre"]
-    static let statusTentative      = ["Mit Vorbehalt", "Tentative", "Provisoire", "Provisional"]
-    static let statusOOF            = ["Außer Haus", "Out of Office", "Absent(e)", "Fuera de la oficina"]
-    static let statusElsewhere      = ["An anderem Ort", "Working Elsewhere", "Travaille ailleurs", "Trabajando en otro lugar"]
-
-    static let organizerPrefix      = ["Organisator ", "Organizer ", "Organisateur ", "Organizador "]
-    static let youAreOrganizer      = ["Sie sind der Organisator", "You are the organizer", "Vous êtes l'organisateur", "Usted es el organizador"]
-
-    static let category             = ["Kategorie", "Category", "Catégorie", "Categoría"]
-
-    static let declinedPrefix       = ["Declined: ", "Abgelehnt: "]
-    static let followingPrefix      = ["Following: "]
-
-    static let menuView             = ["Anzeigen", "View", "Affichage"]
-    static let menuSwitchTo         = ["Wechseln zu", "Switch to", "Basculer vers"]
-    static let navCalendar          = ["Kalender", "Calendar", "Calendrier"]
-
-    static let calendarViewPicker   = ["Kalenderansicht", "Calendar view", "Vue du calendrier"]
-
-    // Detail-window parsing
-    static let sectionOrganizer     = ["Organisator", "Organizer", "Organisateur", "Organizador"]
-    static let sectionRequired      = ["Erforderlich", "Required", "Obligatoire", "Obligatorio"]
-    static let sectionOptional      = ["Optional", "Facultatif", "Opcional"]
-    static let respAccepted         = ["angenommen.", "accepted."]
-    static let respDeclined         = ["abgesagt.", "declined."]
-    static let respNotResponded     = ["nicht geantwortet.", "not responded.", "haven't responded."]
-    static let respTentative        = ["mit Vorbehalt.", "tentative.", "tentatively."]
-    static let detailNoise          = ["statt.", "Findet am", "Takes place", "instead.", "Tiene lugar"]
-
-    static let today                = ["Heute", "Today", "Aujourd'hui", "Hoy"]
-    static let nextDay              = ["Nächster Tag", "Next day", "Next Day", "Jour suivant", "Día siguiente"]
-    static let prevDay              = ["Vorheriger Tag", "Previous day", "Previous Day", "Jour précédent", "Día anterior"]
-
-    static let viewDay              = ["Tag", "Day", "Jour"]
-    static let viewWorkWeek         = ["Arbeitswoche", "Work Week", "Semaine de travail"]
-    static let viewWeek             = ["Woche", "Week", "Semaine"]
-    static let viewMonth            = ["Monat", "Month", "Mois"]
-    static let viewThreeDay         = ["Drei Tage", "Three Day", "Trois jours"]
-    static let viewList             = ["Liste", "List"]
-}
+// L10n is provided by Sources/OutlookAX/Localization/L10n.swift (same module).

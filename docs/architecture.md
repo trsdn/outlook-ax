@@ -2,52 +2,96 @@
 
 > For AI agents modifying outlook-ax. Describes patterns, data flow, and design decisions.
 
-## Single-File Design
+## SwiftPM Architecture
 
-Everything lives in `outlook-ax.swift` (~2100 lines). This is intentional:
+The project uses a three-target SwiftPM architecture:
 
-- **No build system complexity** — `swiftc -O outlook-ax.swift -o outlook-ax` is the entire build
-- **No dependency management** — only macOS system frameworks (ApplicationServices, AppKit, CoreGraphics)
-- **Easy to audit** — one file, grep-able, no indirection layers
+```
+Package.swift
+├── OutlookAX          (library) — AX, connection, services, models, L10n, parsers
+├── OutlookAXCLIKit    (library) — CLI parsing, dispatch, JSON envelopes, output
+└── OutlookAXCLI       (executable) — entry point only (main.swift → exit())
+```
 
-The file is organized top-to-bottom in dependency order: helpers → L10n → connection → types → commands → parsing → main.
+Build: `swift build -c release --product outlook-ax`
+
+> **No root outlook-ax.swift**: The single-file implementation has been fully migrated.
+> All implementations live in `Sources/OutlookAX/`.
 
 ## Data Flow
 
 ```
-CLI args → switch dispatch → cmdXxx() → connectOutlook()
-                                            ↓
-                                    ensureOutlookReady()
-                                    (AppleScript: launch + unminimize)
-                                            ↓
-                                    AXUIElement tree traversal
-                                    (findElement / findAll with L10n matching)
-                                            ↓
-                                    ok() / fail() → stdout (JSON or text)
+CLI args → main.swift
+  → CLIParser.parse() → CLIParseResult (.command / .help / .usageError)
+  → CLIRunner.run(command) → ConnectionManager.passiveConnect() or .interactiveConnect()
+      ↓
+  MailService.xxx(conn:) or CalendarService.xxx(conn:)
+      ↓
+  AXHelpers: axFind() / axFindAll() / axPressButtonAny()
+  L10n: axEqualsAny() / axMatchesAny() / axStartsWithAny()
+      ↓
+  throws OutlookAXError or returns typed result
+      ↓
+  CLIRunner → OutputRenderer → stdout (JSON v2 or plain text)
+  CLIRunner returns Int32 exit code → main.swift calls exit()
 ```
+
+## Connection Policies
+
+Two connection types from `ConnectionManager`:
+
+| Method | Use for | AX trust check | Launch? |
+|--------|---------|---------------|---------|
+| `passiveConnect()` | Status, read commands | Yes (throws 77) | No |
+| `tryPassiveConnect()` | `.status` only (never fails) | Yes (returns nil) | No |
+| `interactiveConnect()` | Compose, create, navigate | Yes (throws 77) | Yes |
 
 ## AX Element Access Pattern
 
-Every command follows the same pattern:
+Every service method follows the same pattern:
 
 ```swift
-func cmdExample() {
-    // 1. Connect (auto-launches Outlook)
-    guard let conn = connectOutlook() else { fail("Outlook not running") }
-    let win = conn.wins[0]
+// In MailService or CalendarService
+public static func readInbox(limit: Int, conn: OutlookConnection) throws -> [MailMessageSummary] {
+    // 1. Semantic window selection (never wins[0])
+    let win = try conn.mainMailWindow()
 
-    // 2. Find element using L10n-aware matching
-    if let elem = findElement(win, matching: {
-        equalsAny(descOf($0), L10n.someLabel) && roleOf($0) == "AXButton"
-    }) {
-        // 3. Read or act
-        let value = valueOf(elem)
-        // 4. Output
-        ok("Done", extra: ["key": value])
-    } else {
-        fail("Element not found")
-    }
+    // 2. Precondition check
+    guard isInbox else { throw OutlookAXError.inboxNotSelected }
+
+    // 3. Find element using L10n-aware matching via AXHelpers
+    guard let table = axFind(win, where: {
+        axRole($0) == "AXTable" && axEqualsAny(axDesc($0), L10n.messageList)
+    }) else { throw OutlookAXError.messageListNotFound }
+
+    // 4. Parse and return typed result
+    return parseRows(table, limit: limit)
 }
+```
+
+## Form Safety Pattern
+
+For compose/create commands — enforced in both MailService and CalendarService:
+
+```swift
+// 1. Snapshot windows before opening editor
+let priorTitles = Set(conn.wins.map { axTitle($0) })
+
+// 2. Open editor (press button)
+// ...
+
+// 3. Find new editor by before/after identity (throws .ambiguousWindow if multiple)
+let editor = try conn.uniqueNewWindow(before: priorTitles, matching: { ... })
+
+// 4. Fill each requested field — throw immediately on failure
+guard let field = axFind(editor, where: { ... }) else {
+    throw OutlookAXError.formFieldNotFound(field: "Subject")
+}
+let rc = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, value as CFTypeRef)
+guard rc == .success else { throw OutlookAXError.formFieldWriteFailed(field: "Subject") }
+
+// 5. Send/Save ONLY reached if all fields succeeded
+if send { AXUIElementPerformAction(sendBtn, kAXPressAction as CFString) }
 ```
 
 ## L10n System
@@ -56,7 +100,7 @@ func cmdExample() {
 
 A simple `[String]` array per label is the lightest approach:
 - No key-value mapping needed — we just need "does any variant match?"
-- Helper functions (`matchesAny`, `equalsAny`, etc.) iterate the array
+- Helper functions (`axEqualsAny`, `axMatchesAny`, etc.) iterate the array
 - Adding a language = appending one string to each array
 - No runtime locale detection needed — we try all variants
 
@@ -64,11 +108,13 @@ A simple `[String]` array per label is the lightest approach:
 
 | Function | Use when |
 |----------|----------|
-| `equalsAny(text, variants)` | Exact match — button desc, section headers |
-| `startsWithAny(text, variants)` | Prefix — "Neue Benachrichtigungen: 3", date prefixes |
-| `matchesAny(text, variants)` | Contains — label anywhere in longer text |
-| `endsWithAny(text, variants)` | Suffix — response counts "5 accepted." |
-| `pressButtonAny(win, descPrefixes:)` | Find + press first matching button |
+| `axEqualsAny(text, variants)` | Exact match — button desc, section headers |
+| `axStartsWithAny(text, variants)` | Prefix — "New notifications: 3", date prefixes |
+| `axMatchesAny(text, variants)` | Contains — label anywhere in longer text |
+| `axEndsWithAny(text, variants)` | Suffix — response counts "5 accepted." |
+| `axPressButtonAny(win, prefixes:)` | Find + press first matching button |
+
+These are also available as `L10n.equals()`, `L10n.startsWith()`, `L10n.matches()`, `L10n.endsWith()`.
 
 ### Output Normalization
 
@@ -78,6 +124,7 @@ The UI shows localized values. We normalize to English in output:
 UI: "Gebucht" / "Occupé" / "Busy"  →  JSON: "Busy"
 UI: "angenommen."                    →  JSON: "accepted"
 UI: "Kalender"                       →  JSON: view: "calendar"
+```
 ```
 
 This happens in each command function, not centrally. The pattern is:

@@ -1,14 +1,22 @@
-.PHONY: build install clean
+.PHONY: build install clean test check
 
-BINARY = outlook-ax
-SRC = outlook-ax.swift
-PREFIX ?= /usr/local/bin
+BINARY   = outlook-ax
+PREFIX  ?= /usr/local/bin
 
 build:
-	swiftc -O $(SRC) -o $(BINARY)
+	swift build -c release --product $(BINARY)
+	cp .build/release/$(BINARY) .
 
 install: build
 	cp $(BINARY) $(PREFIX)/$(BINARY)
 
+test: build
+	swift test
+
 clean:
 	rm -f $(BINARY)
+	swift package clean
+
+check: build test
+	bash scripts/check-repository-layout.sh
+	bash scripts/check-architecture.sh

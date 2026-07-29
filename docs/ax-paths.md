@@ -2,6 +2,9 @@
 
 > For AI agents. Maps Outlook UI elements to their AX attributes and L10n keys.
 > These paths were discovered and verified on Outlook for Mac (new, WebView-based).
+>
+> **All AX access goes through `Sources/OutlookAX/` helper functions.**
+> Use `axFind()`, `axFindAll()`, `axRole()`, `axTitle()`, `axDesc()`, `axValue()` from AXHelpers.swift.
 
 ## Important Context
 
@@ -10,32 +13,42 @@
 - Labels match the user's **Outlook language setting**, not macOS system language
 - The `.lproj/*.strings` files in the app bundle are for legacy native views only
 
+## Window Selection
+
+Use `OutlookConnection` semantic selectors — **never** use `wins[0]`:
+
+| Method | Returns | Condition |
+|--------|---------|-----------|
+| `conn.mainMailWindow()` | AXUIElement | First window with inboxWindow title or "Outlook" |
+| `conn.calendarWindow()` | AXUIElement | First window with calendarWindow title |
+| `conn.uniqueNewWindow(before:matching:)` | AXUIElement? | Exactly one new window appeared |
+
 ## Mail View
 
 ### Message List
 
 | Element | Role | Attribute | L10n Key | Notes |
 |---------|------|-----------|----------|-------|
-| Message list table | AXTable | `desc` | `L10n.messageList` | Contains AXRow children |
+| Message list table | AXTable | `desc` equals | `L10n.messageList` | Contains AXRow children |
 | Message row | AXRow | — | — | Children are AXCell with desc text |
-| Message cell | AXCell | `desc` contains | `L10n.composeWindow` | Fallback: any AXRow in table |
+| Inbox folder | AXWindow title equals | — | `L10n.inboxWindow` | Verify before parsing |
 
 ### Reading Pane (Current Email)
 
 | Element | Role | Attribute | L10n Key | Notes |
 |---------|------|-----------|----------|-------|
-| Header container | AXGroup | `title` | `L10n.messageHeader` | Contains from, to, date |
-| Header details | AXGroup | `desc` | `L10n.headerDetails` | Expanded header area |
+| Header container | AXGroup | `title` equals | `L10n.messageHeader` | Contains from, to, date |
+| Header details | AXGroup | `desc` equals | `L10n.headerDetails` | Expanded header area |
 | From | AXStaticText | `desc="messageHeaderFromContent"` | — | **Not localized** — stable identifier |
 | Recipients | AXStaticText | `desc="messageHeaderRecipientsContent"` | — | **Not localized** — stable identifier |
 | Sent date | AXStaticText | `title` starts with | `L10n.sentPrefix` | e.g. "Gesendet am: 18.04.2026" |
-| Body | AXWebArea | `desc="Reading Pane"` | — | **Not localized** — use `collectText()` to extract |
+| Body | AXWebArea | `desc="Reading Pane"` | — | **Not localized** — use `axCollectText()` |
 
 ### Search
 
 | Element | Role | Attribute | L10n Key |
 |---------|------|-----------|----------|
-| Search field | AXTextField | `desc` | `L10n.search` |
+| Search field | AXTextField | `desc` equals | `L10n.search` |
 
 ### Mail Actions (Toolbar)
 
@@ -52,7 +65,7 @@
 | Report | AXButton | `desc` | `L10n.report` |
 | React | AXButton | `desc` | `L10n.react` |
 | Summarize | AXButton | `desc` | `L10n.summarize` |
-| Filter/Sort | AXPopUpButton | `desc` | `L10n.filterSort` |
+| Filter/Sort | AXPopUpButton | `desc` equals | `L10n.filterSort` |
 | More items | AXButton | `desc` | `L10n.moreItems` |
 
 ### Compose Window

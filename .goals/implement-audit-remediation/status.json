@@ -1,0 +1,26 @@
+{
+  "goal_id": "implement-audit-remediation",
+  "status": "completed",
+  "iteration": 3,
+  "builder_model": "Claude:Sonnet-4.6",
+  "inspector_model": "Claude:Haiku-4.5",
+  "initial_sha": "6386f980352e043474d7eb41d26ac3f3cb6da12a",
+  "created_at": "2026-07-25T23:49:06.725+02:00",
+  "history": [
+    {
+      "iteration": 1,
+      "verdict": "PASS",
+      "timestamp": "2026-07-25T22:38:55.304734+00:00"
+    },
+    {
+      "iteration": 2,
+      "verdict": "FAIL",
+      "timestamp": "2026-07-29T00:02:14.682+02:00"
+    },
+    {
+      "iteration": 3,
+      "verdict": "PASS",
+      "timestamp": "2026-07-29T00:22:00.000+02:00"
+    }
+  ]
+}

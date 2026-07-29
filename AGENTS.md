@@ -1,95 +1,185 @@
 # AGENTS.md — outlook-ax
 
 > This file is for AI agents. It describes the project structure, conventions,
-> and rules so you can make changes correctly without reading all 2000+ lines first.
+> and rules so you can make changes correctly without reading all source files first.
 
 ## What This Is
 
-A single-file Swift CLI (`outlook-ax.swift`) that controls Microsoft Outlook on macOS
-via the Accessibility API (AXUIElement). No dependencies, no package manager.
-Compiles with `swiftc -O outlook-ax.swift -o outlook-ax`.
-
-## File Layout
+A Swift CLI (`outlook-ax`) that controls Microsoft Outlook on macOS via the
+Accessibility API (AXUIElement). Built as a Swift Package (SwiftPM).
 
 ```
-outlook-ax.swift          # Everything — helpers, L10n, commands, argument parsing
-Makefile                  # build / install / clean
-README.md                 # Human-readable usage docs
-LICENSE                   # MIT
-skills/ax-discovery/      # Agent skill: how to explore Outlook's AX tree
-docs/architecture.md      # Code structure, patterns, conventions (this companion)
-docs/ax-paths.md          # Verified AX element paths by view
+swift build -c release --product outlook-ax
 ```
 
-## Code Sections (in order)
+Produces a single distributable executable at `.build/release/outlook-ax`.
+`make build` runs the above and copies the binary to `./outlook-ax`.
 
-| Line | MARK | Purpose |
-|------|------|---------|
-| ~7 | AX Helpers | `roleOf`, `titleOf`, `descOf`, `valueOf`, `childrenOf`, `findElement`, `findAll`, `collectText` |
-| ~63 | — | `pressButton`, `pressButtonByTitle` — convenience wrappers |
-| ~85 | Keyboard Simulation | `typeText`, `pressTab`, `pressReturn`, `pressEscape`, `pressCommandA` via CGEvent |
-| ~177 | L10n | `matchesAny`, `startsWithAny`, `equalsAny`, `endsWithAny`, `pressButtonAny` + `struct L10n` with 124 label arrays |
-| ~392 | Outlook Connection | `ensureOutlookReady()` (AppleScript launch/unminimize), `connectOutlook()`, `refreshWindows()`, `currentView()` |
-| ~420 | JSON Output | `jsonFlag`, `detailsFlag`, `ok()`, `fail()`, `printJSON()` helpers |
-| ~450 | JSON Types | Codable structs: `EmailJSON`, `InboxItemJSON`, `EventJSON`, `AttendeeJSON`, `CalendarInfoJSON` |
-| ~530 | Commands: Status | `cmdStatus()` |
-| ~550 | Commands: Notifications | `cmdNotifications()` |
-| ~570 | Commands: Mail | `cmdMailCurrent`, `cmdMailInbox`, `cmdMailSearch`, `cmdMailReply`, `cmdMailForward`, `cmdMailDelete`, `cmdMailArchive`, `cmdMailCompose`, `cmdMailFolders`, `cmdMailFolder` |
-| ~900 | Commands: Calendar | `cmdCalendarToday` (biggest function ~300 lines), `cmdCalendarCreate`, `cmdCalendarView`, `cmdCalendarNavigate`, `cmdCalendarCalendars`, `cmdCalendarToggle` |
-| ~1530 | Commands: Navigate | `cmdNavigate(to:)` — switches Outlook views |
-| ~1600 | Menu Bar Helper | `triggerMenuL10n` (L10n-aware), `triggerMenu` (legacy wrapper) |
-| ~1640 | Mail Commands (batch 2) | `cmdMailReplyAll`, `cmdMailFlag`, `cmdMailReadUnread`, `cmdMailMove`, `cmdMailReport`, `cmdMailReact`, `cmdMailSummarize`, `cmdMailFilter` |
-| ~1730 | Calendar Commands (batch 2) | `cmdCalendarTimescale`, `cmdCalendarFilter`, `cmdCalendarColor`, `cmdCalendarAccept/Tentative/Decline`, `cmdCalendarJoin`, `cmdCalendarDuplicate`, `cmdCalendarCategorize`, `cmdCalendarPrivate`, `cmdCalendarShowAs` |
-| ~1880 | System Commands | `cmdSync`, `cmdAutoReply`, `cmdMyDay`, `cmdAccount` |
-| ~1950 | Argument Parsing | `argValue()`, `usage()` |
-| ~2070 | Main | Top-level `switch` on `CommandLine.arguments` |
+## Package Structure
+
+```
+Package.swift                    # SwiftPM manifest: OutlookAX + OutlookAXCLIKit + OutlookAXCLI
+Makefile                         # build / install / clean / test / check
+README.md                        # Human-readable usage docs
+AGENTS.md                        # This file
+CHANGELOG.md                     # Version history
+
+Sources/OutlookAX/               # Library: AX, models, localization, parsers, services
+  OutlookAX.swift                # Public API facade (backward-compatible library surface)
+  AX/
+    AXHelpers.swift              # Internal AX helpers: axRole, axTitle, axFind, axTypeText…
+  Connection/
+    ConnectionManager.swift      # passiveConnect(), interactiveConnect(), window selection
+  Menu/
+    MenuWalker.swift             # Menu bar traversal by L10n path arrays
+  Mail/
+    MailService.swift            # All mail commands: readInbox, compose, reply, etc.
+  Calendar/
+    CalendarService.swift        # All calendar commands: readToday, createEvent, navigate…
+    CalendarTemporalParser.swift # Temporal parser: 12/24h, all-day, year, DST
+  Models/
+    Errors.swift                 # OutlookAXError with exit codes and machine codes
+    MailModels.swift             # MailMessageSummary, MailMessage, FolderIdentity
+    CalendarModels.swift         # CalendarEvent, Attendee, EventDetails, CalendarIdentity
+    CalendarTemporal.swift       # CalendarTemporal, TemporalResolution, TimeZoneSource
+  Localization/
+    L10n.swift                   # Shared L10n catalog (de, en, fr, es, it)
+
+Sources/OutlookAXCLIKit/         # CLI runtime: parsing, dispatch, JSON envelopes
+  CLICommand.swift               # Typed CLICommand enum
+  CLIParser.swift                # Argument parser → CLIParseResult (no exit())
+  CLIRunner.swift                # Command runner → actual dispatch (no exit())
+  JSONEnvelope.swift             # JSONSuccess, JSONFailure, typed payloads
+  OutputRenderer.swift           # stdout/stderr output
+
+Sources/OutlookAXCLI/            # Executable entry point
+  main.swift                     # Only file that calls exit()
+
+Tests/OutlookAXTests/            # Library tests: models, parsers, L10n
+Tests/OutlookAXCLITests/         # CLI unit tests: parser, JSON envelope, exit codes
+Tests/OutlookAXCLISubprocessTests/  # Subprocess tests: real binary exit codes, JSON shape
+```
+
+> **Important**: The root `outlook-ax.swift` has been removed. All AX, connection,
+> mail, and calendar implementations live exclusively in `Sources/OutlookAX/`.
+> Do NOT create a root-level Swift file as a shortcut — all additions go into
+> the appropriate `Sources/` subdirectory.
 
 ## Rules for Making Changes
 
 ### Adding a new command
 
-1. Write `func cmdNewThing()` — place it in the appropriate MARK section
-2. Use L10n for ALL label matching (never hardcode a single language)
-3. Add `case` to the `switch cmd` block in Main
-4. Add line to `usage()`
-5. Use `ok()` / `fail()` for output, support `--json` via `jsonFlag`
+1. Add a case to `CLICommand` in `Sources/OutlookAXCLIKit/CLICommand.swift`
+2. Add parsing logic to `CLIParser` in `Sources/OutlookAXCLIKit/CLIParser.swift`
+3. Add a service method in `Sources/OutlookAX/Mail/MailService.swift` or
+   `Sources/OutlookAX/Calendar/CalendarService.swift`
+4. Add dispatch to `CLIRunner.run()` in `Sources/OutlookAXCLIKit/CLIRunner.swift`
+5. Add tests in `Tests/OutlookAXCLITests/` and/or `Tests/OutlookAXCLISubprocessTests/`
+6. Update `docs/` if the command adds new JSON output
+
+### AX access
+
+- All AX element access MUST go through `Sources/OutlookAX/` (library module)
+- AXHelpers.swift provides internal helpers: `axRole()`, `axTitle()`, `axDesc()`,
+  `axValue()`, `axChildren()`, `axFind()`, `axFindAll()`, `axTypeText()`, etc.
+- `OutlookAXCLIKit` and `OutlookAXCLI` must NEVER import `ApplicationServices` directly
 
 ### Adding L10n labels
 
-- Add to `struct L10n` (line ~206)
+- Edit `Sources/OutlookAX/Localization/L10n.swift`
 - Convention: `[de, en, fr, es, it]` — German first, then English, then others
-- Use the matching function that fits: `equalsAny` (exact), `startsWithAny` (prefix), `matchesAny` (contains), `endsWithAny` (suffix)
+- Each command-critical key MUST have variants for all five locales
+- Use `L10n.equals()`, `L10n.startsWith()`, `L10n.matches()` (contains), `L10n.endsWith()`
+- For AX matching use: `axEqualsAny()`, `axStartsWithAny()`, `axMatchesAny()`, `axEndsWithAny()`
+- **Do NOT add localized strings to command files** — all UI labels go to L10n.swift
 
 ### Output conventions
 
 - All JSON output values are normalized to **English** regardless of UI language
 - Status values: `"Busy"`, `"Free"`, `"Tentative"`, `"Out of Office"`, `"Working Elsewhere"`
-- Response values: `"accepted"`, `"declined"`, `"tentative"`, `"none"`
+- Response values: `"accepted"`, `"declined"`, `"tentative"`, `"none"`, `"following"`
 - View names: `"calendar"`, `"mail"`, `"people"`, `"unknown"`
-- `ok(message, extra:)` for success, `fail(message)` for errors (exits with code 1)
+- `--json` produces the v2 typed envelope; `--json-version 1` for legacy compat
 
-### Menu-based commands
+### Connection policies
 
-- Use `triggerMenuL10n(app, path: [L10n.menuX, L10n.menuY])` — each path element is an array of L10n variants
-- Legacy `triggerMenu(app, path: ["exact", "strings"])` wraps triggerMenuL10n with single-element arrays
+| Policy     | Use for                            | Effect                             |
+|------------|------------------------------------|------------------------------------|
+| passive    | Status, read, observational        | No launch/activation/unminimize    |
+| interactive| Compose, create, navigate actions  | May launch/activate/focus          |
+
+- `ConnectionManager.passiveConnect()` → throws if not running or no AX permission
+- `ConnectionManager.tryPassiveConnect()` → returns nil instead of throwing (for status)
+- `ConnectionManager.interactiveConnect()` → launches Outlook if needed, activates
+- Never use an interactive connection for read-only commands.
+
+### Window selection
+
+- **Never** use `wins[0]` — use `OutlookConnection` semantic selectors instead
+- `conn.mainMailWindow()` — semantic mail window (throws `.noAccessibleWindows`)
+- `conn.calendarWindow()` — semantic calendar window (throws `.noAccessibleWindows`)
+- `conn.uniqueNewWindow(before:matching:)` — before/after identity for new editors
+- Fail with `OutlookAXError.ambiguousWindow` when multiple windows match
+
+### Form safety
+
+- Preflight every field before pressing Send/Save
+- Check AX return codes after every write
+- Verify postconditions (readable field value matches expected)
+- **Never invoke Send/Save after any field failure**
+- Fail with `OutlookAXError.sendBlockedByFieldFailure`
+- Use before/after identity snapshots for new editor/compose window detection
+
+### Error exit codes
+
+| Code | Meaning                                      |
+|------|----------------------------------------------|
+| 0    | Success                                      |
+| 1    | Operation failure                            |
+| 64   | Usage / argument error                       |
+| 69   | Outlook not running, no windows, wrong view  |
+| 77   | Accessibility permission denied              |
 
 ### Safety
 
-- `ensureOutlookReady()` auto-launches and unminimizes — no need to check manually
-- `connectOutlook()` calls `ensureOutlookReady()` automatically
-- Mail compose opens draft but does NOT send (unless explicit `--send` on calendar create)
-- Date/time fields require keyboard simulation (CGEvent), not AXValue writes
+- Status/read commands MUST use passive connection (no activation)
+- NEVER press Send, Delete, Discard, or broad Close in discovery or tests
+- Date/time keyboard simulation is allowed only in an explicitly owned editor
+- NEVER close a window that existed before the current operation
+- Use before/after identity snapshots for new editor/compose window detection
+
+### Architecture guards
+
+Run `bash scripts/check-architecture.sh` to verify:
+- Root `outlook-ax.swift` is absent (migration complete)
+- No `wins[0]` in `Sources/`
+- Single L10n definition in `Sources/`
+- No direct AX calls outside `Sources/OutlookAX/`
+- `ConnectionManager.swift` exists
+- Subprocess tests exist
 
 ## Skills Path
 
 Canonical skills live in `.agents/skills/`. Before using or listing skills,
 run `bash scripts/sync-agent-skills.sh` to mirror them to `.claude/skills/`.
 `.claude/skills/` is gitignored and only a local mirror.
+The sync script works from any working directory.
 
-## Do NOT
+## Claude Hook
 
-- Add dependencies or Package.swift — this must stay a single `swiftc` compilation
-- Hardcode labels in any single language — always use L10n arrays
-- Output non-English values in JSON — normalize everything
-- Call `AXPressAction` on Send/Delete buttons in discovery/exploration code
-- Add `import Foundation` — it's already implicit via ApplicationServices
+`.claude/settings.json` (note: no dot prefix) configures the SessionStart hook
+that runs `bash scripts/sync-agent-skills.sh` automatically.
+
+## Build, Test, Check
+
+```bash
+make build                              # Release build + copy binary
+swift test                              # Run all Swift tests (63 tests)
+bash scripts/check-repository-layout.sh   # Layout checks
+bash scripts/check-architecture.sh         # Architecture checks
+make check                              # All of the above
+```
+
+> Note: `swift test` includes subprocess tests that run the real binary.
+> `make build` must succeed before running `swift test` for subprocess tests to pass.
+
