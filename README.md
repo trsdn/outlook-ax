@@ -16,6 +16,15 @@ make install      # → /usr/local/bin/outlook-ax
 
 Requires Xcode Command Line Tools (`xcode-select --install`).
 
+## Releases
+
+Releases follow [Semantic Versioning](https://semver.org/) and use tags in the
+form `vMAJOR.MINOR.PATCH`. Update `CHANGELOG.md`, create and push the matching
+tag, and GitHub Actions will build, test, package, and publish the installable
+macOS archive as the release asset. The archive contains the executable, this
+README, and the license; source archives are not the supported installation
+artifact.
+
 ## Permissions
 
 The terminal running `outlook-ax` needs **Accessibility** permission:
